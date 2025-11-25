@@ -1,0 +1,61 @@
+-- 1. Convert UTC to SA time and duration to seconds
+ALTER TABLE viewership ADD COLUMN sa_time timestamp;
+UPDATE viewership SET sa_time = recorddate2 + INTERVAL '2 hours';
+
+ALTER TABLE viewership ADD COLUMN duration_seconds int;
+UPDATE viewership SET duration_seconds = 
+    (SPLIT_PART(duration2, ':', 1)::int * 3600) + 
+    (SPLIT_PART(duration2, ':', 2)::int * 60) + 
+    SPLIT_PART(duration2, ':', 3)::int;
+
+-- 2. Total consumption (hours)
+SELECT SUM(duration_seconds) / 3600 AS total_hours FROM viewership;
+
+-- 3. Consumption by channel
+SELECT channel2, SUM(duration_seconds) / 3600 AS hours 
+FROM viewership GROUP BY channel2 ORDER BY hours DESC;
+
+-- 4. Daily consumption
+SELECT DATE(sa_time) AS date, SUM(duration_seconds) / 3600 AS hours 
+FROM viewership GROUP BY date ORDER BY date;
+
+-- 5. Consumption by day of week
+SELECT TO_CHAR(sa_time, 'Day') AS day_of_week, SUM(duration_seconds) / 3600 AS hours 
+FROM viewership GROUP BY day_of_week ORDER BY hours DESC;
+
+-- 6. Low consumption days (below average)
+WITH daily AS (
+    SELECT DATE(sa_time) AS date, SUM(duration_seconds) / 3600 AS hours 
+    FROM viewership GROUP BY date
+),
+avg_daily AS (SELECT AVG(hours) AS mean FROM daily)
+SELECT d.date, d.hours FROM daily d, avg_daily a WHERE d.hours < a.mean;
+
+-- 7. Join and analyze by demographics
+SELECT u.gender, SUM(v.duration_seconds) / 3600 AS hours 
+FROM viewership v JOIN users u ON v.userid = u.userid GROUP BY u.gender;
+
+SELECT 
+    CASE 
+        WHEN u.age BETWEEN 0 AND 18 THEN '0-18'
+        WHEN u.age BETWEEN 19 AND 30 THEN '19-30'
+        WHEN u.age BETWEEN 31 AND 45 THEN '31-45'
+        WHEN u.age BETWEEN 46 AND 60 THEN '46-60'
+        ELSE '61+' 
+    END AS age_group, 
+    SUM(v.duration_seconds) / 3600 AS hours 
+FROM viewership v JOIN users u ON v.userid = u.userid GROUP BY age_group;
+
+SELECT u.province, SUM(v.duration_seconds) / 3600 AS hours 
+FROM viewership v JOIN users u ON v.userid = u.userid GROUP BY u.province ORDER BY hours DESC;
+
+-- 8. Popular channels on high days
+WITH daily AS (
+    SELECT DATE(sa_time) AS date, SUM(duration_seconds) / 3600 AS hours 
+    FROM viewership GROUP BY date
+),
+avg_daily AS (SELECT AVG(hours) AS mean FROM daily),
+high_days AS (SELECT date FROM daily, avg_daily WHERE hours > mean)
+SELECT channel2, SUM(duration_seconds) / 3600 AS hours 
+FROM viewership WHERE DATE(sa_time) IN (SELECT date FROM high_days) 
+GROUP BY channel2 ORDER BY hours DESC;
